@@ -73,6 +73,7 @@ pub struct SnakeSegment;
 
 /// 玩家数据
 pub struct Player{
+    id: String,
     snake_segments: Vec<Entity>,
 }
 
@@ -86,8 +87,12 @@ pub struct LastTailPosition(Option<Position>);
 #[derive(Component)]
 pub struct Food;
 
-pub struct GrowthEvent;
-pub struct GameOverEvent;
+pub struct GrowthEvent{
+    player_id: String
+}
+pub struct GameOverEvent{
+    player_id: String  
+}
 
 #[derive(PartialEq, Copy, Clone)]
 pub enum Direction {
@@ -112,10 +117,19 @@ pub fn camera_setup(mut commands: Commands) {
     commands.spawn(Camera2dBundle::default());
 }
 
+pub fn game_start(commands: Commands, mut players: ResMut<PlayerList>){
+    info!("游戏开始!");
+    //添加一个测试玩家
+    let player_id = "你好".to_string();
+    players.push(Player { id: player_id.to_string(), snake_segments: vec![] });
+    spawn_snake(commands, players, &player_id);
+}
+
 /// 创建小蛇
-pub fn spawn_snake(mut commands: Commands, mut segments: ResMut<PlayerList>) {
-    segments.iter_mut().for_each(|player| {
-        player.snake_segments = vec![
+pub fn spawn_snake(mut commands: Commands, mut players: ResMut<PlayerList>, player_id: &str) {
+    for player in players.iter_mut(){
+        if player.id == player_id{
+            player.snake_segments = vec![
             commands
                 .spawn(SpriteBundle {
                     sprite: Sprite {
@@ -131,9 +145,11 @@ pub fn spawn_snake(mut commands: Commands, mut segments: ResMut<PlayerList>) {
                 .insert(Position { x: 3, y: 3 })
                 .insert(Size::square(0.8))
                 .id(),
-            spawn_segment(&mut commands, Position { x: 3, y: 2 }),
-        ];
-    });
+                spawn_segment(&mut commands, Position { x: 3, y: 2 }),
+            ];
+            break;
+        }
+    }
 }
 
 pub fn snake_movement_input(keyboard_input: Res<Input<KeyCode>>, mut heads: Query<&mut SnakeHead>) {
@@ -158,7 +174,7 @@ pub fn snake_movement_input(keyboard_input: Res<Input<KeyCode>>, mut heads: Quer
 /// 移动蛇
 pub fn snake_movement(
     // 查询SnakeSegments数组资源
-    players: ResMut<PlayerList>,
+    mut players: ResMut<PlayerList>,
     mut last_tail_position: ResMut<LastTailPosition>,
     // 用于发送游戏结束事件
     mut game_over_writer: EventWriter<GameOverEvent>,
@@ -202,11 +218,11 @@ pub fn snake_movement(
             || head_pos.x as u32 >= ARENA_WIDTH
             || head_pos.y as u32 >= ARENA_HEIGHT
         {
-            game_over_writer.send(GameOverEvent);
+            game_over_writer.send(GameOverEvent{ player_id: player.id.clone() });
         }
 
         if segment_positions.contains(&head_pos) {
-            game_over_writer.send(GameOverEvent);
+            game_over_writer.send(GameOverEvent{ player_id: player.id.clone() });
         }
         
         // 设置所有蛇身(不包括蛇头)跟随前一个蛇身(包括蛇头)的位置
@@ -260,9 +276,9 @@ pub fn food_spawner(mut commands: Commands,
     //禁止在尾巴上生成食物
     loop{
         let segments = players.iter()
-            .filter_map(|player| player.snake_segments.as_ref())
-            // .collect::<Vec<&Vec<Entity>>>()
-            // .into_iter()
+            .filter_map(|player| Some(player.snake_segments.as_ref()))
+            .collect::<Vec<&Vec<Entity>>>()
+            .into_iter()
             .flatten()
             .collect::<Vec<&Entity>>();
 
@@ -317,45 +333,93 @@ pub fn spawn_segment(commands: &mut Commands, position: Position) -> Entity {
 pub fn snake_eating(
     mut commands: Commands,
     mut growth_writer: EventWriter<GrowthEvent>,
+    players: ResMut<PlayerList>,
     food_positions: Query<(Entity, &Position), With<Food>>,
     head_positions: Query<&Position, With<SnakeHead>>,
 ) {
-    for head_pos in head_positions.iter() {
-        for (ent, food_pos) in food_positions.iter() {
-            if food_pos == head_pos {
-                info!("🐍吃到了食物");
-                commands.entity(ent).despawn();
-                growth_writer.send(GrowthEvent);
+    //循环所有玩家
+    // for (player, head_pos) in players
+    //     .iter()
+    //     .filter_map(|player| player.snake_segments.get(0).map(|entity| (player, entity)) )
+    //     .filter_map(|(player, entity)| head_positions.get(*entity).map(|position| (player, position)).ok()){
+    //     for (ent, food_pos) in food_positions.iter() {
+    //         if food_pos == head_pos {
+    //             info!("玩家[{}]吃到了食物", player.id);
+    //             commands.entity(ent).despawn();
+    //             growth_writer.send(GrowthEvent{ player_id: player.id.clone() });
+    //             return;
+    //         }
+    //     }
+    // }
+
+
+    for player in players.iter(){
+        if let Some(Ok(head_pos)) = player.snake_segments
+        .get(0)
+        .map(|entity| head_positions.get(*entity))
+        {
+            for (ent, food_pos) in food_positions.iter() {
+                if food_pos == head_pos {
+                    info!("玩家[{}]吃到了食物", player.id);
+                    commands.entity(ent).despawn();
+                    growth_writer.send(GrowthEvent{ player_id: player.id.clone() });
+                    return;
+                }
             }
         }
     }
+        
+    // for player in players.iter(){
+    //     if let Some(head_entity) = player.snake_segments.get(0){
+    //         if let Ok(head_pos) = head_positions.get(*head_entity){
+    //             for (ent, food_pos) in food_positions.iter() {
+    //                 if food_pos == head_pos {
+    //                     info!("玩家[{}]吃到了食物", player.id);
+    //                     commands.entity(ent).despawn();
+    //                     growth_writer.send(GrowthEvent{ player_id: player.id.clone() });
+    //                     return;
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 pub fn snake_growth(
     mut commands: Commands,
     last_tail_position: Res<LastTailPosition>,
-    mut segments: ResMut<SnakeSegments>,
+    mut players: ResMut<PlayerList>,
     mut growth_reader: EventReader<GrowthEvent>,
 ) {
-    if growth_reader.iter().next().is_some() {
-        info!("🐍蛇长大了.");
-        segments.push(spawn_segment(&mut commands, last_tail_position.0.unwrap()));
+    if let Some(event) = growth_reader.iter().next(){
+        let player_id = &event.player_id;
+        info!("玩家[{}]的蛇长大了.", player_id);
+        for player in players.iter_mut(){
+            if &player.id == player_id{
+                player.snake_segments.push(spawn_segment(&mut commands, last_tail_position.0.unwrap()));
+                return;
+            }
+        }
     }
 }
 
 pub fn game_over(
-    mut commands: Commands,
+    commands: Commands,
     mut reader: EventReader<GameOverEvent>,
-    segments_res: ResMut<SnakeSegments>,
-    food: Query<Entity, With<Food>>,
-    segments: Query<Entity, With<SnakeSegment>>,
+    players: ResMut<PlayerList>,
+    // food: Query<Entity, With<Food>>,
+    // segments: Query<Entity, With<SnakeSegment>>,
 ) {
-    if reader.iter().next().is_some() {
-        info!("游戏结束.");
-        for ent in food.iter().chain(segments.iter()) {
-            commands.entity(ent).despawn();
-        }
-        spawn_snake(commands, segments_res);
+    if let Some(event) = reader.iter().next() {
+        let player_id = &event.player_id;
+
+        info!("玩家[{player_id}]死亡.");
+
+        //清空所有Food
+        // for ent in food.iter().chain(segments.iter()) {
+        //     commands.entity(ent).despawn();
+        // }
+        spawn_snake(commands, players, player_id);
     }
 }
 
@@ -363,7 +427,7 @@ pub struct SnakeGame;
 
 impl Plugin for SnakeGame {
     fn build(&self, app: &mut App) {
-        app.add_startup_system(spawn_snake)
+        app.add_startup_system(game_start)
         .add_system_set(
             SystemSet::new()
                 .with_run_criteria(FixedTimestep::step(0.15))
@@ -374,7 +438,7 @@ impl Plugin for SnakeGame {
         .add_system(game_over.after(snake_movement))
         
         .insert_resource(ClearColor(Color::rgb(0.04, 0.04, 0.04)))
-        .insert_resource(SnakeSegments::default())
+        .insert_resource(PlayerList::default())
         .insert_resource(LastTailPosition::default())
         .add_event::<GrowthEvent>()
         .add_event::<GameOverEvent>()
