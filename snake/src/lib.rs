@@ -5,6 +5,28 @@ use rand::random;
 
 // https://mbuffett.com/posts/bevy-snake-tutorial/ 贪吃蛇教程
 
+/*
+结构分析
+Position: 组件
+Size: 组件
+
+SnakeHead{ direction }：[组件]
+SnakeSegment: [组件]
+SnakeSegments(Vec<Entity>): [资源] 蛇头、蛇身都存放在这里
+LastTailPosition(Option<Position>): [资源] 存放蛇尾的位置
+
+产生一蛇头：spawn SpriteBundle, insert( SnakeHead, SnakeSegment, Position, Size, id )
+产生一蛇身：spawn SpriteBundle, insert( SnakeSegment, Position, Size, id )
+
+Food: 组件
+
+产生一个Food: spawn SpriteBundle, insert( Position, Size )
+
+-------------------------------------------------------
+
+
+ */
+
 /// 蛇头颜色
 const SNAKE_HEAD_COLOR: Color = Color::rgb(0.7, 0.7, 0.7);
 /// 食物
@@ -46,8 +68,17 @@ pub struct SnakeHead{
 #[derive(Component)]
 pub struct SnakeSegment;
 
+// #[derive(Resource, Default, Deref, DerefMut)]
+// pub struct SnakeSegments(Vec<Entity>);
+
+/// 玩家数据
+pub struct Player{
+    snake_segments: Vec<Entity>,
+}
+
+/// 玩家列表
 #[derive(Resource, Default, Deref, DerefMut)]
-pub struct SnakeSegments(Vec<Entity>);
+pub struct PlayerList(Vec<Player>);
 
 #[derive(Resource, Default)]
 pub struct LastTailPosition(Option<Position>);
@@ -82,25 +113,27 @@ pub fn camera_setup(mut commands: Commands) {
 }
 
 /// 创建小蛇
-pub fn spawn_snake(mut commands: Commands, mut segments: ResMut<SnakeSegments>) {
-    *segments = SnakeSegments(vec![
-        commands
-            .spawn(SpriteBundle {
-                sprite: Sprite {
-                    color: SNAKE_HEAD_COLOR,
+pub fn spawn_snake(mut commands: Commands, mut segments: ResMut<PlayerList>) {
+    segments.iter_mut().for_each(|player| {
+        player.snake_segments = vec![
+            commands
+                .spawn(SpriteBundle {
+                    sprite: Sprite {
+                        color: SNAKE_HEAD_COLOR,
+                        ..default()
+                    },
                     ..default()
-                },
-                ..default()
-            })
-            .insert(SnakeHead {
-                direction: Direction::Up,
-            })
-            .insert(SnakeSegment)
-            .insert(Position { x: 3, y: 3 })
-            .insert(Size::square(0.8))
-            .id(),
-        spawn_segment(&mut commands, Position { x: 3, y: 2 }),
-    ]);
+                })
+                .insert(SnakeHead {
+                    direction: Direction::Up,
+                })
+                .insert(SnakeSegment)
+                .insert(Position { x: 3, y: 3 })
+                .insert(Size::square(0.8))
+                .id(),
+            spawn_segment(&mut commands, Position { x: 3, y: 2 }),
+        ];
+    });
 }
 
 pub fn snake_movement_input(keyboard_input: Res<Input<KeyCode>>, mut heads: Query<&mut SnakeHead>) {
@@ -124,17 +157,29 @@ pub fn snake_movement_input(keyboard_input: Res<Input<KeyCode>>, mut heads: Quer
 
 /// 移动蛇
 pub fn snake_movement(
-    segments: ResMut<SnakeSegments>,
+    // 查询SnakeSegments数组资源
+    players: ResMut<PlayerList>,
     mut last_tail_position: ResMut<LastTailPosition>,
+    // 用于发送游戏结束事件
     mut game_over_writer: EventWriter<GameOverEvent>,
-    mut heads: Query<(Entity, &SnakeHead)>,
+    // 查询蛇头实体组件
+    mut heads: Query<&SnakeHead>,
+    // 查询所有实体上的Position组件
     mut positions: Query<&mut Position>,
 ) {
-    if let Some((head_entity, head)) = heads.iter_mut().next() {
-        let segment_positions = segments
-            .iter()
-            .map(|e| *positions.get_mut(*e).unwrap())
-            .collect::<Vec<Position>>();
+    players.iter_mut().for_each(|player|{
+        //查询到玩家蛇头
+        let head_entity = *player.snake_segments.get(0).unwrap();
+        let head = heads.get_mut(head_entity).unwrap();
+        
+        // 循环蛇头和所有蛇尾的Entity
+        let segment_positions = player.snake_segments
+        .iter()
+    // 根据Entity查询到他们的所有Position
+        .map(|e| *positions.get_mut(*e).unwrap())
+        .collect::<Vec<Position>>();
+
+        // 获取蛇头实体的位置，并增加它的位置
         let mut head_pos = positions.get_mut(head_entity).unwrap();
         match &head.direction {
             Direction::Left => {
@@ -151,6 +196,7 @@ pub fn snake_movement(
             }
         };
 
+        // 检查蛇头是否碰撞
         if head_pos.x < 0
             || head_pos.y < 0
             || head_pos.x as u32 >= ARENA_WIDTH
@@ -162,16 +208,18 @@ pub fn snake_movement(
         if segment_positions.contains(&head_pos) {
             game_over_writer.send(GameOverEvent);
         }
-
+        
+        // 设置所有蛇身(不包括蛇头)跟随前一个蛇身(包括蛇头)的位置
         segment_positions
-            .iter()
-            .zip(segments.iter().skip(1))
-            .for_each(|(pos, segment)| {
-                *positions.get_mut(*segment).unwrap() = *pos;
-            });
-
+        .iter()
+        .zip(player.snake_segments.iter().skip(1))
+        .for_each(|(pos, segment)| {
+            *positions.get_mut(*segment).unwrap() = *pos;
+        });
+        
+        // 存储蛇尾的位置
         *last_tail_position = LastTailPosition(Some(*segment_positions.last().unwrap()));
-    }
+    });
 }
 
 pub fn size_scaling(windows: Res<Windows>, mut q: Query<(&Size, &mut Transform)>) {
@@ -203,7 +251,7 @@ pub fn position_translation(windows: Res<Windows>, mut q: Query<(&Position, &mut
 }
 
 pub fn food_spawner(mut commands: Commands,
-    segments: Res<SnakeSegments>,
+    players: Res<PlayerList>,
     mut positions: Query<&mut Position>) {
 
     let mut x = (random::<f32>() * ARENA_WIDTH as f32) as i32;
@@ -211,9 +259,15 @@ pub fn food_spawner(mut commands: Commands,
 
     //禁止在尾巴上生成食物
     loop{
-        let collisions = segments
-            .iter()
-            .map(|e|{
+        let segments = players.iter()
+            .filter_map(|player| player.snake_segments.as_ref())
+            // .collect::<Vec<&Vec<Entity>>>()
+            // .into_iter()
+            .flatten()
+            .collect::<Vec<&Entity>>();
+
+        let collisions = segments.into_iter()
+                .map(|e|{
                 let segment_pos = *positions.get_mut(*e).unwrap();
                 if segment_pos.x == x && segment_pos.y == y{
                     1
