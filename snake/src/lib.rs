@@ -1,31 +1,11 @@
+use std::collections::HashMap;
+
 use bevy::{prelude::*, time::{FixedTimestep, TimePlugin}, app::{PluginGroupBuilder, ScheduleRunnerPlugin}, log::LogPlugin, window::PresentMode};
 use bevy_inspector_egui::WorldInspectorPlugin;
 use rand::random;
 //https://bevyengine.org/assets/#assets 教程网站
 
 // https://mbuffett.com/posts/bevy-snake-tutorial/ 贪吃蛇教程
-
-/*
-结构分析
-Position: 组件
-Size: 组件
-
-SnakeHead{ direction }：[组件]
-SnakeSegment: [组件]
-SnakeSegments(Vec<Entity>): [资源] 蛇头、蛇身都存放在这里
-LastTailPosition(Option<Position>): [资源] 存放蛇尾的位置
-
-产生一蛇头：spawn SpriteBundle, insert( SnakeHead, SnakeSegment, Position, Size, id )
-产生一蛇身：spawn SpriteBundle, insert( SnakeSegment, Position, Size, id )
-
-Food: 组件
-
-产生一个Food: spawn SpriteBundle, insert( Position, Size )
-
--------------------------------------------------------
-
-
- */
 
 /// 蛇头颜色
 const SNAKE_HEAD_COLOR: Color = Color::rgb(0.7, 0.7, 0.7);
@@ -45,6 +25,12 @@ pub struct Position {
     y: i32,
 }
 
+impl Position {
+    fn new(x: i32, y:i32) -> Self{
+        Self{x, y}
+    }
+}
+
 #[derive(Component)]
 pub struct Size {
     width: f32,
@@ -60,7 +46,7 @@ impl Size {
 }
 
 /// 蛇头
-#[derive(Component)]
+#[derive(Component, Debug)]
 pub struct SnakeHead{
     direction: Direction,
 }
@@ -71,15 +57,19 @@ pub struct SnakeSegment;
 // #[derive(Resource, Default, Deref, DerefMut)]
 // pub struct SnakeSegments(Vec<Entity>);
 
-/// 玩家数据
-pub struct Player{
-    id: String,
-    snake_segments: Vec<Entity>,
-}
-
 /// 玩家列表
 #[derive(Resource, Default, Deref, DerefMut)]
-pub struct PlayerList(Vec<Player>);
+pub struct PlayerList(HashMap<String, PlayerInfo>);
+
+pub struct PlayerInfo{
+    snake_segments: Vec<Entity>,
+    player_id: String,
+    spawn_pos: Position,
+}
+
+/// 玩家信息
+#[derive(Component, Debug)]
+pub struct PlayerId(String);
 
 #[derive(Resource, Default)]
 pub struct LastTailPosition(Option<Position>);
@@ -90,11 +80,11 @@ pub struct Food;
 pub struct GrowthEvent{
     player_id: String
 }
-pub struct GameOverEvent{
+pub struct PlayerDeathEvent{
     player_id: String  
 }
 
-#[derive(PartialEq, Copy, Clone)]
+#[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Direction {
     Left,
     Up,
@@ -117,56 +107,75 @@ pub fn camera_setup(mut commands: Commands) {
     commands.spawn(Camera2dBundle::default());
 }
 
-pub fn game_start(commands: Commands, mut players: ResMut<PlayerList>){
+pub fn game_start(mut commands: Commands, mut player_list: ResMut<PlayerList>){
     info!("游戏开始!");
     //添加一个测试玩家
-    let player_id = "你好".to_string();
-    players.push(Player { id: player_id.to_string(), snake_segments: vec![] });
-    spawn_snake(commands, players, &player_id);
+    let player_id = String::from("Planet");
+    let player_info = PlayerInfo {
+        snake_segments: vec![],
+        player_id:player_id.clone(),
+        spawn_pos: Position::new(3, 3)
+    };
+    player_list.insert(player_id.clone(), player_info);
+
+    spawn_snake(&mut commands, &mut player_list, player_id);
+
+    //添加一个测试玩家
+    let player_id = String::from("Snake");
+    let player_info = PlayerInfo {
+        snake_segments: vec![],
+        player_id:player_id.clone(),
+        spawn_pos: Position::new(6, 3)
+    };
+    player_list.insert(player_id.clone(), player_info);
+
+    spawn_snake(&mut commands, &mut player_list, player_id);
 }
 
 /// 创建小蛇
-pub fn spawn_snake(mut commands: Commands, mut players: ResMut<PlayerList>, player_id: &str) {
-    for player in players.iter_mut(){
-        if player.id == player_id{
-            player.snake_segments = vec![
-            commands
-                .spawn(SpriteBundle {
-                    sprite: Sprite {
-                        color: SNAKE_HEAD_COLOR,
-                        ..default()
-                    },
+pub fn spawn_snake(mut commands: &mut Commands, player_list: &mut ResMut<PlayerList>, player_id: String) {
+
+    if let Some(player) = player_list.get_mut(&player_id){
+        player.snake_segments.clear();
+        player.snake_segments.push(commands
+            .spawn(SpriteBundle {
+                sprite: Sprite {
+                    color: SNAKE_HEAD_COLOR,
                     ..default()
-                })
-                .insert(SnakeHead {
-                    direction: Direction::Up,
-                })
-                .insert(SnakeSegment)
-                .insert(Position { x: 3, y: 3 })
-                .insert(Size::square(0.8))
-                .id(),
-                spawn_segment(&mut commands, Position { x: 3, y: 2 }),
-            ];
-            break;
-        }
+                },
+                ..default()
+            })
+            .insert(SnakeHead {
+                direction: Direction::Up,
+            })
+            .insert(PlayerId(player_id))
+            .insert(SnakeSegment)
+            .insert(player.spawn_pos.clone())
+            .insert(Size::square(0.8))
+            .id());
+            
+            player.snake_segments.push(spawn_segment(&mut commands, Position::new(player.spawn_pos.x, player.spawn_pos.y-1)));
     }
 }
 
-pub fn snake_movement_input(keyboard_input: Res<Input<KeyCode>>, mut heads: Query<&mut SnakeHead>) {
-    if let Some(mut head) = heads.iter_mut().next() {
-        let dir: Direction = if keyboard_input.pressed(KeyCode::Left) {
-            Direction::Left
-        } else if keyboard_input.pressed(KeyCode::Down) {
-            Direction::Down
-        } else if keyboard_input.pressed(KeyCode::Up) {
-            Direction::Up
-        } else if keyboard_input.pressed(KeyCode::Right) {
-            Direction::Right
-        } else {
-            head.direction
-        };
-        if dir != head.direction.opposite() {
-            head.direction = dir;
+pub fn snake_movement_input(keyboard_input: Res<Input<KeyCode>>, mut heads: Query<(&mut SnakeHead,  &PlayerId)>) {
+    for (mut head, player_id) in heads.iter_mut(){
+        if player_id.0 == "Planet"{
+            let dir: Direction = if keyboard_input.pressed(KeyCode::Left) {
+                Direction::Left
+            } else if keyboard_input.pressed(KeyCode::Down) {
+                Direction::Down
+            } else if keyboard_input.pressed(KeyCode::Up) {
+                Direction::Up
+            } else if keyboard_input.pressed(KeyCode::Right) {
+                Direction::Right
+            } else {
+                head.direction
+            };
+            if dir != head.direction.opposite() {
+                head.direction = dir;
+            }
+            return;
         }
     }
 }
@@ -174,29 +183,42 @@ pub fn snake_movement_input(keyboard_input: Res<Input<KeyCode>>, mut heads: Quer
 /// 移动蛇
 pub fn snake_movement(
     // 查询SnakeSegments数组资源
-    mut players: ResMut<PlayerList>,
+    player_list: Res<PlayerList>,
     mut last_tail_position: ResMut<LastTailPosition>,
     // 用于发送游戏结束事件
-    mut game_over_writer: EventWriter<GameOverEvent>,
+    mut player_death_writer: EventWriter<PlayerDeathEvent>,
     // 查询蛇头实体组件
-    mut heads: Query<&SnakeHead>,
+    heads: Query<(&SnakeHead, &PlayerId)>,
+    mut snake_positions: Query<&mut Position, With<SnakeSegment>>,
     // 查询所有实体上的Position组件
-    mut positions: Query<&mut Position>,
+    // mut positions: Query<&mut Position>,
 ) {
-    players.iter_mut().for_each(|player|{
-        //查询到玩家蛇头
-        let head_entity = *player.snake_segments.get(0).unwrap();
-        let head = heads.get_mut(head_entity).unwrap();
-        
-        // 循环蛇头和所有蛇尾的Entity
-        let segment_positions = player.snake_segments
+
+    //所有玩家的蛇头
+
+    for (head, player_id) in heads.iter(){
+        let player_info = match player_list.get(&player_id.0){
+            None => continue,
+            Some(v) => v
+        };
+
+        // 循环玩家蛇头和所有蛇尾的Entity
+        let segment_positions = player_info.snake_segments
         .iter()
-    // 根据Entity查询到他们的所有Position
-        .map(|e| *positions.get_mut(*e).unwrap())
+        // 根据Entity查询到他们的所有Position
+        .filter_map(|e| snake_positions.get(*e).ok())
+        .map(|pos| *pos)
         .collect::<Vec<Position>>();
 
-        // 获取蛇头实体的位置，并增加它的位置
-        let mut head_pos = positions.get_mut(head_entity).unwrap();
+        //更新玩家的蛇头方向
+        let head_entity = *player_info.snake_segments.get(0).unwrap();
+
+        // 获取蛇头实体的位置
+        let mut head_pos = match snake_positions.get(head_entity){
+            Err(_) => continue,
+            Ok(v) => v.clone()
+        };
+
         match &head.direction {
             Direction::Left => {
                 head_pos.x -= 1;
@@ -212,30 +234,36 @@ pub fn snake_movement(
             }
         };
 
-        // 检查蛇头是否碰撞
+        // 检查蛇头是否碰撞其他蛇、超出屏幕
         if head_pos.x < 0
             || head_pos.y < 0
             || head_pos.x as u32 >= ARENA_WIDTH
             || head_pos.y as u32 >= ARENA_HEIGHT
         {
-            game_over_writer.send(GameOverEvent{ player_id: player.id.clone() });
+            player_death_writer.send(PlayerDeathEvent{ player_id: player_info.player_id.clone() });
         }
 
-        if segment_positions.contains(&head_pos) {
-            game_over_writer.send(GameOverEvent{ player_id: player.id.clone() });
+        for snake_pos in snake_positions.iter(){
+            if snake_pos.x == head_pos.x && snake_pos.y == head_pos.y{
+                player_death_writer.send(PlayerDeathEvent{ player_id: player_info.player_id.clone() });
+                break;
+            }
         }
+
+        //更新蛇头位置
+        *snake_positions.get_mut(head_entity).unwrap() = head_pos;
         
         // 设置所有蛇身(不包括蛇头)跟随前一个蛇身(包括蛇头)的位置
         segment_positions
         .iter()
-        .zip(player.snake_segments.iter().skip(1))
+        .zip(player_info.snake_segments.iter().skip(1))
         .for_each(|(pos, segment)| {
-            *positions.get_mut(*segment).unwrap() = *pos;
+            *snake_positions.get_mut(*segment).unwrap() = *pos;
         });
         
         // 存储蛇尾的位置
         *last_tail_position = LastTailPosition(Some(*segment_positions.last().unwrap()));
-    });
+    }
 }
 
 pub fn size_scaling(windows: Res<Windows>, mut q: Query<(&Size, &mut Transform)>) {
@@ -267,30 +295,21 @@ pub fn position_translation(windows: Res<Windows>, mut q: Query<(&Position, &mut
 }
 
 pub fn food_spawner(mut commands: Commands,
-    players: Res<PlayerList>,
-    mut positions: Query<&mut Position>) {
+    positions: Query<&mut Position, With<SnakeSegment>>) {
 
     let mut x = (random::<f32>() * ARENA_WIDTH as f32) as i32;
     let mut y = (random::<f32>() * ARENA_HEIGHT as f32) as i32;
 
     //禁止在尾巴上生成食物
     loop{
-        let segments = players.iter()
-            .filter_map(|player| Some(player.snake_segments.as_ref()))
-            .collect::<Vec<&Vec<Entity>>>()
-            .into_iter()
-            .flatten()
-            .collect::<Vec<&Entity>>();
-
-        let collisions = segments.into_iter()
-                .map(|e|{
-                let segment_pos = *positions.get_mut(*e).unwrap();
+        let collisions = positions.iter().map(|segment_pos|{
                 if segment_pos.x == x && segment_pos.y == y{
                     1
                 }else{
                     0
                 }
             }).collect::<Vec<i32>>().iter().sum::<i32>();
+
         if collisions == 0{
             break;
         }else{
@@ -299,7 +318,6 @@ pub fn food_spawner(mut commands: Commands,
             y = (random::<f32>() * ARENA_HEIGHT as f32) as i32;
         }
     }
-    
 
     commands
         .spawn(SpriteBundle {
@@ -330,97 +348,74 @@ pub fn spawn_segment(commands: &mut Commands, position: Position) -> Entity {
         .id()
 }
 
+/// 检测是否有玩家的蛇头吃到了一个食物
 pub fn snake_eating(
     mut commands: Commands,
     mut growth_writer: EventWriter<GrowthEvent>,
-    players: ResMut<PlayerList>,
     food_positions: Query<(Entity, &Position), With<Food>>,
-    head_positions: Query<&Position, With<SnakeHead>>,
+    head_positions: Query<(&PlayerId, &Position), With<SnakeHead>>,
 ) {
-    //循环所有玩家
-    // for (player, head_pos) in players
-    //     .iter()
-    //     .filter_map(|player| player.snake_segments.get(0).map(|entity| (player, entity)) )
-    //     .filter_map(|(player, entity)| head_positions.get(*entity).map(|position| (player, position)).ok()){
-    //     for (ent, food_pos) in food_positions.iter() {
-    //         if food_pos == head_pos {
-    //             info!("玩家[{}]吃到了食物", player.id);
-    //             commands.entity(ent).despawn();
-    //             growth_writer.send(GrowthEvent{ player_id: player.id.clone() });
-    //             return;
-    //         }
-    //     }
-    // }
-
-
-    for player in players.iter(){
-        if let Some(Ok(head_pos)) = player.snake_segments
-        .get(0)
-        .map(|entity| head_positions.get(*entity))
-        {
-            for (ent, food_pos) in food_positions.iter() {
-                if food_pos == head_pos {
-                    info!("玩家[{}]吃到了食物", player.id);
-                    commands.entity(ent).despawn();
-                    growth_writer.send(GrowthEvent{ player_id: player.id.clone() });
-                    return;
-                }
-            }
-        }
-    }
-        
-    // for player in players.iter(){
-    //     if let Some(head_entity) = player.snake_segments.get(0){
-    //         if let Ok(head_pos) = head_positions.get(*head_entity){
-    //             for (ent, food_pos) in food_positions.iter() {
-    //                 if food_pos == head_pos {
-    //                     info!("玩家[{}]吃到了食物", player.id);
-    //                     commands.entity(ent).despawn();
-    //                     growth_writer.send(GrowthEvent{ player_id: player.id.clone() });
-    //                     return;
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
-}
-
-pub fn snake_growth(
-    mut commands: Commands,
-    last_tail_position: Res<LastTailPosition>,
-    mut players: ResMut<PlayerList>,
-    mut growth_reader: EventReader<GrowthEvent>,
-) {
-    if let Some(event) = growth_reader.iter().next(){
-        let player_id = &event.player_id;
-        info!("玩家[{}]的蛇长大了.", player_id);
-        for player in players.iter_mut(){
-            if &player.id == player_id{
-                player.snake_segments.push(spawn_segment(&mut commands, last_tail_position.0.unwrap()));
+    for(player_id, head_pos) in head_positions.iter(){
+        for (ent, food_pos) in food_positions.iter() {
+            if food_pos == head_pos {
+                info!("玩家[{:?}]吃到了食物", player_id);
+                commands.entity(ent).despawn();
+                growth_writer.send(GrowthEvent{ player_id: player_id.0.clone() });
                 return;
             }
         }
     }
 }
 
-pub fn game_over(
-    commands: Commands,
-    mut reader: EventReader<GameOverEvent>,
-    players: ResMut<PlayerList>,
+/// 玩家吃到了食物，玩家长大了
+pub fn snake_growth(
+    mut commands: Commands,
+    last_tail_position: Res<LastTailPosition>,
+    mut player_segments: ResMut<PlayerList>,
+    mut growth_reader: EventReader<GrowthEvent>,
+) {
+    let event = match growth_reader.iter().next(){
+        None => return,
+        Some(event) => event
+    };
+
+    let player_id = &event.player_id;
+
+    info!("玩家[{}]的蛇长大了.", player_id);
+
+    if let (Some(player_info), Some(last_tail_position)) = (player_segments.get_mut(player_id), last_tail_position.0){
+        player_info.snake_segments.push(spawn_segment(&mut commands, last_tail_position));
+    }
+}
+
+pub fn player_death(
+    mut commands: Commands,
+    mut reader: EventReader<PlayerDeathEvent>,
+    mut player_list: ResMut<PlayerList>,
+    // players: ResMut<PlayerList>,
     // food: Query<Entity, With<Food>>,
     // segments: Query<Entity, With<SnakeSegment>>,
 ) {
-    if let Some(event) = reader.iter().next() {
-        let player_id = &event.player_id;
+    let event = match reader.iter().next(){
+        None => return,
+        Some(event) => event
+    };
 
-        info!("玩家[{player_id}]死亡.");
+    let player_id = &event.player_id;
 
-        //清空所有Food
-        // for ent in food.iter().chain(segments.iter()) {
-        //     commands.entity(ent).despawn();
-        // }
-        spawn_snake(commands, players, player_id);
+    info!("玩家[{player_id}]死亡.");
+
+    if let Some(player) = player_list.get(player_id){
+        for ent in player.snake_segments.iter(){
+            commands.entity(*ent).despawn();
+        }
     }
+
+    //清空所有Food
+    // for ent in food.iter().chain(segments.iter()) {
+    //     commands.entity(ent).despawn();
+    // }
+    spawn_snake(&mut commands, &mut player_list, player_id.clone());
 }
 
 pub struct SnakeGame;
@@ -435,16 +430,16 @@ impl Plugin for SnakeGame {
                 .with_system(snake_eating.after(snake_movement))
                 .with_system(snake_growth.after(snake_eating))
         )
-        .add_system(game_over.after(snake_movement))
+        .add_system(player_death.after(snake_movement))
         
         .insert_resource(ClearColor(Color::rgb(0.04, 0.04, 0.04)))
         .insert_resource(PlayerList::default())
         .insert_resource(LastTailPosition::default())
         .add_event::<GrowthEvent>()
-        .add_event::<GameOverEvent>()
+        .add_event::<PlayerDeathEvent>()
         .add_system_set(
             SystemSet::new()
-                .with_run_criteria(FixedTimestep::step(1.0))
+                .with_run_criteria(FixedTimestep::step(6.0))
                 .with_system(food_spawner),
         );
     }
@@ -470,8 +465,8 @@ impl Plugin for WindowPlugins {
         app.add_plugins(DefaultPlugins.set(WindowPlugin {
             window: WindowDescriptor {
                 title: "贪吃蛇".to_string(),
-                width: 400.,
-                height: 400.,
+                width: 800.,
+                height: 800.,
                 present_mode: PresentMode::AutoVsync,
                 ..default()
             },
