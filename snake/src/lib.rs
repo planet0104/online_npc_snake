@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use bevy::{prelude::*, time::{FixedTimestep, TimePlugin}, app::{PluginGroupBuilder, ScheduleRunnerPlugin}, log::LogPlugin, window::PresentMode};
 use bevy_inspector_egui::WorldInspectorPlugin;
+use futures_channel::mpsc::{UnboundedSender, UnboundedReceiver};
 use rand::random;
 //https://bevyengine.org/assets/#assets 教程网站
 
@@ -60,6 +61,31 @@ pub struct SnakeSegment;
 /// 玩家列表
 #[derive(Resource, Default, Deref, DerefMut)]
 pub struct PlayerList(HashMap<String, PlayerInfo>);
+
+#[derive(Debug, Clone)]
+pub enum IncomingMessage{
+    /// 玩家连线
+    OnConnect,
+    OnMessage(String),
+}
+
+/// 向外部发送消息
+#[derive(Resource, Deref, DerefMut)]
+pub struct MessageSender(UnboundedSender<IncomingMessage>);
+impl MessageSender{
+    pub fn new(sender: UnboundedSender<IncomingMessage>) -> Self{
+        Self(sender)
+    }
+}
+
+/// 接收外部消息
+#[derive(Resource, Deref, DerefMut)]
+pub struct MessageReceiver(UnboundedReceiver<IncomingMessage>);
+impl MessageReceiver{
+    pub fn new(receiver: UnboundedReceiver<IncomingMessage>) -> Self{
+        Self(receiver)
+    }
+}
 
 pub struct PlayerInfo{
     snake_segments: Vec<Entity>,

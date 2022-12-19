@@ -9,5 +9,8 @@ edition = "2021"
 bevy = "0.9.1"
 bevy-inspector-egui = "0.14.0"
 rand = "0.8.5"
+tungstenite = "0.18.0"
 snake = { path="../snake" }
 log = "0.4.17"
+url = "2.3.1"
+anyhow = "1"
