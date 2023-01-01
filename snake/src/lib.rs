@@ -1,33 +1,58 @@
 use std::collections::HashMap;
-
-use bevy::{prelude::*, time::{FixedTimestep, TimePlugin}, app::{PluginGroupBuilder, ScheduleRunnerPlugin}, log::LogPlugin, window::PresentMode};
-use bevy_inspector_egui::WorldInspectorPlugin;
+use serde::{Serialize, Deserialize};
+use bevy::{prelude::*, time::{FixedTimestep, TimePlugin}, app::{PluginGroupBuilder, ScheduleRunnerPlugin}, log::LogPlugin};
 use futures_channel::mpsc::{UnboundedSender, UnboundedReceiver};
 use rand::random;
-//https://bevyengine.org/assets/#assets 教程网站
-
-// https://mbuffett.com/posts/bevy-snake-tutorial/ 贪吃蛇教程
 
 /// 蛇头颜色
-const SNAKE_HEAD_COLOR: Color = Color::rgb(0.7, 0.7, 0.7);
-/// 食物
-const FOOD_COLOR: Color = Color::rgb(1.0, 0.0, 1.0);
+pub const SNAKE_HEAD_COLOR: Color = Color::rgb(0.7, 0.7, 0.7);
+pub const SNAKE_HEAD_COLOR_CURRENT: Color = Color::YELLOW;
+/// 食物fec938
+pub const FOOD_COLOR: Color = Color::rgb(1.0, 0.0, 1.0);
 /// 蛇身颜色
 const SNAKE_SEGMENT_COLOR: Color = Color::rgb(0.3, 0.3, 0.3);
 
 /// 网格宽度
-const ARENA_WIDTH: u32 = 20;
+pub const ARENA_WIDTH: u32 = 40;
 /// 网格高度
-const ARENA_HEIGHT: u32 = 20;
+pub const ARENA_HEIGHT: u32 = 40;
 
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
+/// 发送给客户端的消息
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub enum MessageFromServer{
+    /// 连接成功, 返回uuid
+    OnConnected(String),
+    /// 同步玩家列表
+    LeaderBoard(LeaderBoard),
+    /// 精灵数据
+    SyncData(SyncData)
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct SyncData{
+    pub players: HashMap<String, Vec<Position>>,
+    pub foods: Vec<Position>,
+}
+
+/// 客户端发来的消息
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub enum MessageFromClient{
+    /// 加入游戏 (uuid, user_name)
+    JoinGame((String, String)),
+    /// 退出游戏(掉线)
+    LeaveGame(String),
+    KeyEvent((String, String)),
+    InputName(String)
+}
+
+#[derive(Component, Serialize, Deserialize, Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq)]
 pub struct Position {
     x: i32,
     y: i32,
 }
 
 impl Position {
-    fn new(x: i32, y:i32) -> Self{
+    pub fn new(x: i32, y:i32) -> Self{
         Self{x, y}
     }
 }
@@ -49,24 +74,23 @@ impl Size {
 /// 蛇头
 #[derive(Component, Debug)]
 pub struct SnakeHead{
-    direction: Direction,
+    pub direction: Direction,
 }
 
 #[derive(Component)]
 pub struct SnakeSegment;
 
-// #[derive(Resource, Default, Deref, DerefMut)]
-// pub struct SnakeSegments(Vec<Entity>);
-
 /// 玩家列表
 #[derive(Resource, Default, Deref, DerefMut)]
 pub struct PlayerList(HashMap<String, PlayerInfo>);
+/// 得分榜
+#[derive(Resource, Clone, Serialize, Deserialize, Debug, Default, Deref, DerefMut)]
+pub struct LeaderBoard(Vec<(String, usize)>);
 
 #[derive(Debug, Clone)]
 pub enum IncomingMessage{
-    /// 玩家连线
-    OnConnect,
-    OnMessage(String),
+    ClientMessage(MessageFromClient),
+    ServerMessage(MessageFromServer)
 }
 
 /// 向外部发送消息
@@ -88,17 +112,25 @@ impl MessageReceiver{
 }
 
 pub struct PlayerInfo{
-    snake_segments: Vec<Entity>,
-    player_id: String,
-    spawn_pos: Position,
+    pub snake_segments: Vec<Entity>,
+    pub player_id: String,
+    pub player_name: String,
+    pub spawn_pos: Position,
+    pub last_tail_position: Option<Position>
 }
 
 /// 玩家信息
 #[derive(Component, Debug)]
-pub struct PlayerId(String);
-
-#[derive(Resource, Default)]
-pub struct LastTailPosition(Option<Position>);
+pub struct PlayerId{
+    pub id: String
+}
+impl PlayerId{
+    pub fn new(id: String) -> Self{
+        Self{
+            id
+        }
+    }
+}
 
 #[derive(Component)]
 pub struct Food;
@@ -110,6 +142,9 @@ pub struct PlayerDeathEvent{
     player_id: String  
 }
 
+pub struct SnakeMovementEvent;
+pub struct SyncLeaderBoardEvent;
+
 #[derive(PartialEq, Debug, Copy, Clone)]
 pub enum Direction {
     Left,
@@ -119,7 +154,7 @@ pub enum Direction {
 }
 
 impl Direction {
-    fn opposite(self) -> Self {
+    pub fn opposite(self) -> Self {
         match self {
             Self::Left => Self::Right,
             Self::Right => Self::Left,
@@ -133,40 +168,32 @@ pub fn camera_setup(mut commands: Commands) {
     commands.spawn(Camera2dBundle::default());
 }
 
-pub fn game_start(mut commands: Commands, mut player_list: ResMut<PlayerList>){
-    info!("游戏开始!");
+pub fn game_start(mut _commands: Commands, mut _player_list: ResMut<PlayerList>){
+    // info!("游戏开始!");
+    
     //添加一个测试玩家
-    let player_id = String::from("Planet");
-    let player_info = PlayerInfo {
-        snake_segments: vec![],
-        player_id:player_id.clone(),
-        spawn_pos: Position::new(3, 3)
-    };
-    player_list.insert(player_id.clone(), player_info);
+    // let player_id = String::from("NPC Snake");
+    // let player_info = PlayerInfo {
+    //     snake_segments: vec![],
+    //     player_id:player_id.clone(),
+    //     player_name: player_id.clone(),
+    //     spawn_pos: Position::new(6, 3),
+    //     last_tail_position: None,
+    // };
+    // player_list.insert(player_id.clone(), player_info);
 
-    spawn_snake(&mut commands, &mut player_list, player_id);
-
-    //添加一个测试玩家
-    let player_id = String::from("Snake");
-    let player_info = PlayerInfo {
-        snake_segments: vec![],
-        player_id:player_id.clone(),
-        spawn_pos: Position::new(6, 3)
-    };
-    player_list.insert(player_id.clone(), player_info);
-
-    spawn_snake(&mut commands, &mut player_list, player_id);
+    // spawn_snake(&mut commands, &mut player_list, player_id, SNAKE_HEAD_COLOR);
 }
 
 /// 创建小蛇
-pub fn spawn_snake(mut commands: &mut Commands, player_list: &mut ResMut<PlayerList>, player_id: String) {
+pub fn spawn_snake(mut commands: &mut Commands, player_list: &mut ResMut<PlayerList>, player_id: String, color: Color) {
 
     if let Some(player) = player_list.get_mut(&player_id){
         player.snake_segments.clear();
         player.snake_segments.push(commands
             .spawn(SpriteBundle {
                 sprite: Sprite {
-                    color: SNAKE_HEAD_COLOR,
+                    color,
                     ..default()
                 },
                 ..default()
@@ -174,9 +201,9 @@ pub fn spawn_snake(mut commands: &mut Commands, player_list: &mut ResMut<PlayerL
             .insert(SnakeHead {
                 direction: Direction::Up,
             })
-            .insert(PlayerId(player_id))
+            .insert(PlayerId::new(player_id))
             .insert(SnakeSegment)
-            .insert(player.spawn_pos.clone())
+            .insert(Position::new((random::<f32>() * ARENA_WIDTH as f32) as i32, 0))
             .insert(Size::square(0.8))
             .id());
             
@@ -184,46 +211,22 @@ pub fn spawn_snake(mut commands: &mut Commands, player_list: &mut ResMut<PlayerL
     }
 }
 
-pub fn snake_movement_input(keyboard_input: Res<Input<KeyCode>>, mut heads: Query<(&mut SnakeHead,  &PlayerId)>) {
-    for (mut head, player_id) in heads.iter_mut(){
-        if player_id.0 == "Planet"{
-            let dir: Direction = if keyboard_input.pressed(KeyCode::Left) {
-                Direction::Left
-            } else if keyboard_input.pressed(KeyCode::Down) {
-                Direction::Down
-            } else if keyboard_input.pressed(KeyCode::Up) {
-                Direction::Up
-            } else if keyboard_input.pressed(KeyCode::Right) {
-                Direction::Right
-            } else {
-                head.direction
-            };
-            if dir != head.direction.opposite() {
-                head.direction = dir;
-            }
-            return;
-        }
-    }
-}
-
 /// 移动蛇
 pub fn snake_movement(
     // 查询SnakeSegments数组资源
-    player_list: Res<PlayerList>,
-    mut last_tail_position: ResMut<LastTailPosition>,
+    mut player_list: ResMut<PlayerList>,
     // 用于发送游戏结束事件
     mut player_death_writer: EventWriter<PlayerDeathEvent>,
+    // 发送移动事件
+    mut snake_move_event_writer: EventWriter<SnakeMovementEvent>,
     // 查询蛇头实体组件
     heads: Query<(&SnakeHead, &PlayerId)>,
-    mut snake_positions: Query<&mut Position, With<SnakeSegment>>,
-    // 查询所有实体上的Position组件
-    // mut positions: Query<&mut Position>,
+    mut snake_positions: Query<&mut Position, With<SnakeSegment>>
 ) {
 
     //所有玩家的蛇头
-
     for (head, player_id) in heads.iter(){
-        let player_info = match player_list.get(&player_id.0){
+        let player_info = match player_list.get_mut(&player_id.id){
             None => continue,
             Some(v) => v
         };
@@ -288,8 +291,10 @@ pub fn snake_movement(
         });
         
         // 存储蛇尾的位置
-        *last_tail_position = LastTailPosition(Some(*segment_positions.last().unwrap()));
+        player_info.last_tail_position = Some(*segment_positions.last().unwrap());
     }
+
+    snake_move_event_writer.send(SnakeMovementEvent);
 }
 
 pub fn size_scaling(windows: Res<Windows>, mut q: Query<(&Size, &mut Transform)>) {
@@ -321,7 +326,13 @@ pub fn position_translation(windows: Res<Windows>, mut q: Query<(&Position, &mut
 }
 
 pub fn food_spawner(mut commands: Commands,
+    foods: Query<Entity, With<Food>>,
     positions: Query<&mut Position, With<SnakeSegment>>) {
+
+    // 最多生成20个食物
+    if foods.iter().len() >= 20{
+        return;
+    }
 
     let mut x = (random::<f32>() * ARENA_WIDTH as f32) as i32;
     let mut y = (random::<f32>() * ARENA_HEIGHT as f32) as i32;
@@ -384,9 +395,9 @@ pub fn snake_eating(
     for(player_id, head_pos) in head_positions.iter(){
         for (ent, food_pos) in food_positions.iter() {
             if food_pos == head_pos {
-                info!("玩家[{:?}]吃到了食物", player_id);
+                // info!("玩家[{:?}]吃到了食物", player_id);
                 commands.entity(ent).despawn();
-                growth_writer.send(GrowthEvent{ player_id: player_id.0.clone() });
+                growth_writer.send(GrowthEvent{ player_id: player_id.id.clone() });
                 return;
             }
         }
@@ -396,31 +407,51 @@ pub fn snake_eating(
 /// 玩家吃到了食物，玩家长大了
 pub fn snake_growth(
     mut commands: Commands,
-    last_tail_position: Res<LastTailPosition>,
     mut player_segments: ResMut<PlayerList>,
+    mut leader_board: ResMut<LeaderBoard>,
+    mut sync_leader_board_writer: EventWriter<SyncLeaderBoardEvent>,
     mut growth_reader: EventReader<GrowthEvent>,
 ) {
-    let event = match growth_reader.iter().next(){
-        None => return,
-        Some(event) => event
-    };
-
-    let player_id = &event.player_id;
-
-    info!("玩家[{}]的蛇长大了.", player_id);
-
-    if let (Some(player_info), Some(last_tail_position)) = (player_segments.get_mut(player_id), last_tail_position.0){
-        player_info.snake_segments.push(spawn_segment(&mut commands, last_tail_position));
+    while let Some(event) = growth_reader.iter().next(){
+    
+        let player_id = &event.player_id;
+    
+        // info!("玩家[{}]的蛇长大了.", player_id);
+    
+        if let Some(player_info) = player_segments.get_mut(player_id){
+            if let Some(last_tail_position) = player_info.last_tail_position.clone(){
+                player_info.snake_segments.push(spawn_segment(&mut commands, last_tail_position));
+            }
+            //更新得分榜
+            let mut found = false;
+            for (player_name, score) in leader_board.iter_mut(){
+                if player_name == &player_info.player_name{
+                    if player_info.snake_segments.len() > * score{
+                        *score = player_info.snake_segments.len();
+                    }
+                    found = true;
+                    break;
+                }
+            }
+            if !found{
+                leader_board.push((player_info.player_name.clone(), player_info.snake_segments.len()));
+            }
+            // 排序
+            leader_board.sort_by(|(_, score1), (_, score2)| {
+                score2.cmp(score1)
+            });
+            while leader_board.len() > 10{
+                let _ = leader_board.pop();
+            }
+            sync_leader_board_writer.send(SyncLeaderBoardEvent);
+        }
     }
 }
 
 pub fn player_death(
     mut commands: Commands,
     mut reader: EventReader<PlayerDeathEvent>,
-    mut player_list: ResMut<PlayerList>,
-    // players: ResMut<PlayerList>,
-    // food: Query<Entity, With<Food>>,
-    // segments: Query<Entity, With<SnakeSegment>>,
+    mut player_list: ResMut<PlayerList>
 ) {
     let event = match reader.iter().next(){
         None => return,
@@ -429,7 +460,7 @@ pub fn player_death(
 
     let player_id = &event.player_id;
 
-    info!("玩家[{player_id}]死亡.");
+    // info!("玩家[{player_id}]死亡.");
 
     if let Some(player) = player_list.get(player_id){
         for ent in player.snake_segments.iter(){
@@ -437,11 +468,7 @@ pub fn player_death(
         }
     }
 
-    //清空所有Food
-    // for ent in food.iter().chain(segments.iter()) {
-    //     commands.entity(ent).despawn();
-    // }
-    spawn_snake(&mut commands, &mut player_list, player_id.clone());
+    spawn_snake(&mut commands, &mut player_list, player_id.clone(), SNAKE_HEAD_COLOR);
 }
 
 pub struct SnakeGame;
@@ -460,12 +487,14 @@ impl Plugin for SnakeGame {
         
         .insert_resource(ClearColor(Color::rgb(0.04, 0.04, 0.04)))
         .insert_resource(PlayerList::default())
-        .insert_resource(LastTailPosition::default())
+        .insert_resource(LeaderBoard::default())
         .add_event::<GrowthEvent>()
+        .add_event::<SnakeMovementEvent>()
+        .add_event::<SyncLeaderBoardEvent>()
         .add_event::<PlayerDeathEvent>()
         .add_system_set(
             SystemSet::new()
-                .with_run_criteria(FixedTimestep::step(6.0))
+                .with_run_criteria(FixedTimestep::step(2.0))
                 .with_system(food_spawner),
         );
     }
@@ -480,32 +509,5 @@ impl PluginGroup for HeadlessPlugins {
         .add(CorePlugin::default())
         .add(TimePlugin::default())
         .add(ScheduleRunnerPlugin::default())
-    }
-}
-
-pub struct WindowPlugins;
-
-impl Plugin for WindowPlugins {
-    fn build(&self, app: &mut App) {
-        // 窗口设置
-        app.add_plugins(DefaultPlugins.set(WindowPlugin {
-            window: WindowDescriptor {
-                title: "贪吃蛇".to_string(),
-                width: 800.,
-                height: 800.,
-                present_mode: PresentMode::AutoVsync,
-                ..default()
-            },
-            ..default()
-        }))
-        .add_system_set_to_stage(
-            CoreStage::PostUpdate,
-            SystemSet::new()
-                .with_system(position_translation)
-                .with_system(size_scaling),
-        )
-        .add_plugin(WorldInspectorPlugin::new())
-        .add_startup_system(camera_setup)
-        .add_system(snake_movement_input.before(snake_movement));
     }
 }

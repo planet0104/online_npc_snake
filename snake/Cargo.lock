@@ -2963,6 +2963,7 @@ dependencies = [
  "futures-channel",
  "log",
  "rand",
+ "serde",
 ]
 
 [[package]]
